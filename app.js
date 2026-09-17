@@ -293,6 +293,98 @@ function scheduleAutoRefresh() {
   }, AUTO_REFRESH_INTERVAL);
 }
 
+// ─── Modal – horaires complets ────────────────────────────────────────────────
+
+/** Metadata for each route (used by the modal) */
+const ROUTE_META = {
+  '33N': { label: 'Ligne 33 – Aller',  stop: 'Arrêt #46063', badgeClass: 'badge-33', routeClass: 'route-33', number: '33' },
+  '33S': { label: 'Ligne 33 – Retour', stop: 'Arrêt #48033', badgeClass: 'badge-33', routeClass: 'route-33', number: '33' },
+  '63N': { label: 'Ligne 63 – Aller',  stop: 'Arrêt #41267', badgeClass: 'badge-63', routeClass: 'route-63', number: '63' },
+  '63S': { label: 'Ligne 63 – Retour', stop: 'Arrêt #43509', badgeClass: 'badge-63', routeClass: 'route-63', number: '63' },
+};
+
+function openModal(routeKey) {
+  const meta   = ROUTE_META[routeKey];
+  const times  = scheduleData[routeKey];
+  const now    = nowMinutes();
+
+  // Populate header
+  const badge = el('modalBadge');
+  badge.textContent   = meta.number;
+  badge.className     = 'modal-badge ' + meta.badgeClass;
+  el('modalTitle').textContent    = meta.label;
+  el('modalSubtitle').textContent = meta.stop;
+
+  // Build body
+  const body = el('modalBody');
+  if (!times || times.length === 0) {
+    body.innerHTML = '<div class="modal-no-data">Aucun horaire disponible pour aujourd\'hui.</div>';
+  } else {
+    // Find first upcoming bus index
+    const nextIdx = times.findIndex(t => timeToMinutes(t.time) >= now);
+    const isRoute63 = routeKey.startsWith('63');
+
+    // Group into periods (morning / afternoon / evening) based on hour
+    const periods = [
+      { key: 'morning',   label: 'Matin',        range: [0,  11] },
+      { key: 'afternoon', label: 'Après-midi',    range: [12, 17] },
+      { key: 'evening',   label: 'Soir / Nuit',   range: [18, 30] },
+    ];
+
+    let html = '';
+    periods.forEach(period => {
+      const periodTimes = times.filter(t => {
+        const h = parseInt(t.time.split(':')[0], 10);
+        return h >= period.range[0] && h <= period.range[1];
+      });
+      if (periodTimes.length === 0) return;
+
+      html += `<div class="modal-period-header">${period.label}</div>`;
+      periodTimes.forEach(bus => {
+        const busMinutes = timeToMinutes(bus.time);
+        const idx        = times.indexOf(bus);
+        const isPast     = busMinutes < now;
+        const isNext     = idx === nextIdx;
+        const diff       = busMinutes - now;
+        const cdown      = !isPast ? formatCountdown(diff) : '';
+        const cclass     = !isPast && diff >= 0 ? countdownClass(diff) : '';
+        const rowRoute   = isRoute63 ? 'route-63' : 'route-33';
+
+        let rowClass = 'modal-time-row';
+        if (isPast)  rowClass += ' is-past';
+        if (isNext)  rowClass += ' is-next ' + rowRoute;
+
+        const pillHtml = isNext
+          ? `<span class="modal-next-pill">Prochain</span>`
+          : `${renderCrowding(bus.crowding)}`;
+
+        html += `
+          <div class="${rowClass}">
+            <span class="modal-time-val">${bus.time}</span>
+            ${pillHtml}
+            <span class="modal-time-cdown ${cclass}">${isPast ? 'Passé' : cdown}</span>
+          </div>`;
+      });
+    });
+
+    body.innerHTML = html;
+
+    // Scroll to the next bus row
+    requestAnimationFrame(() => {
+      const nextRow = body.querySelector('.is-next');
+      if (nextRow) nextRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+
+  el('modalOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal() {
+  el('modalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 function init() {
@@ -304,6 +396,20 @@ function init() {
   el('refreshBtn').addEventListener('click', () => {
     fetchAll();
     scheduleAutoRefresh(); // reset the auto-refresh timer
+  });
+
+  // ── Click on any bus card → open modal
+  ROUTES.forEach(r => {
+    el('card-' + r.id).addEventListener('click', () => openModal(r.id));
+  });
+
+  // ── Close modal
+  el('modalClose').addEventListener('click', closeModal);
+  el('modalOverlay').addEventListener('click', e => {
+    if (e.target === el('modalOverlay')) closeModal();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeModal();
   });
 
   // Initial fetch
